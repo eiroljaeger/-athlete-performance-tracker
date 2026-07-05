@@ -84,6 +84,7 @@ const sportTemplates = {
 };
 
 const defaultBackendUrl = "https://athlete-performance-backend.onrender.com";
+const initialJoinTeamCode = new URLSearchParams(window.location.search).get("team") || "";
 
 const seedAthletes = [
   makeAthlete("a1", "Maya Santos", 17, "Track and Field", "Sprinter", "maya.santos@school.edu", "MAYA-88", [
@@ -150,10 +151,16 @@ const state = {
   attendanceDate: new Date().toISOString().slice(0, 10),
   loginMode: "coach",
   authMode: "login",
+  joinTeamCode: initialJoinTeamCode,
   resetEmail: "",
   resetCode: "",
 };
 currentTestDefinitions = state.testDefinitions;
+
+if (initialJoinTeamCode) {
+  state.loginMode = "athlete";
+  state.authMode = "signup";
+}
 
 let backendPushTimer;
 let isRestoringFromBackend = false;
@@ -374,6 +381,14 @@ function teamEndpointFor(baseUrl, code = state.teamCode) {
 
 function accountEndpointFor(baseUrl, email) {
   return `${baseUrl}/api/accounts/${encodeURIComponent(normalizeEmail(email))}`;
+}
+
+function appBaseUrl() {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+function athleteJoinUrl(code = state.teamCode) {
+  return `${appBaseUrl()}?team=${encodeURIComponent(code)}`;
 }
 
 function emailToUsername(email) {
@@ -651,11 +666,11 @@ function renderLogin() {
     event.preventDefault();
     if (state.loginMode === "coach") {
       if (state.authMode === "forgot") return resetPassword();
-      return state.authMode === "signup" ? createCoachAccount() : loginCoachAccount(true);
+      return state.authMode === "signup" ? createCoachAccount() : loginCoachAccount(false);
     }
 
     if (state.authMode === "forgot") return resetPassword();
-    return state.authMode === "signup" ? createAthleteAccount() : loginAthleteAccount(true);
+    return state.authMode === "signup" ? createAthleteAccount() : loginAthleteAccount(false);
   });
 
   document.getElementById("sendResetCodeBtn")?.addEventListener("click", sendResetCode);
@@ -712,7 +727,7 @@ function athleteLoginFields() {
       </div>
       <div class="field">
         <label for="teamCode">Team Share Code</label>
-        <input id="teamCode" value="${state.teamCode}" required />
+        <input id="teamCode" value="${state.joinTeamCode || state.teamCode}" required />
       </div>
       <div class="form-grid compact-fields">
         <div class="field"><label for="athleteAge">Age</label><input id="athleteAge" type="number" min="5" max="80" value="16" required /></div>
@@ -1008,10 +1023,11 @@ function teamPage() {
         <div>
           <span class="eyebrow">Athlete share login</span>
           <h2>${state.teamCode}</h2>
-          <p>Athletes choose Athlete Login, enter this team code, then enter their personal access code.</p>
+          <p>Send the join link to athletes. It opens signup with this team code already filled in.</p>
         </div>
         <div class="btn-row">
           <button class="button game-button" id="publishTeamBtn" type="button">Publish Team Code</button>
+          <button class="ghost-button" id="copyJoinLinkBtn" type="button">Copy Join Link</button>
           <button class="ghost-button" id="teamNameBtn" type="button">Edit Team Setup</button>
         </div>
       </div>
@@ -1617,6 +1633,23 @@ async function pushTeamToBackend(payloadOverride = null) {
       try {
         const response = await request();
         if (response.ok) {
+          let verified = false;
+          try {
+            const verifyResponse = await fetch(teamEndpointFor(baseUrl, code), { cache: "no-store" });
+            if (verifyResponse.ok) {
+              const verifiedTeam = await verifyResponse.json();
+              verified = normalizeTeamCode(verifiedTeam.teamCode) === normalizeTeamCode(code);
+            }
+            if (!verified) {
+              const dataResponse = await fetch(`${baseUrl}/api/data`, { cache: "no-store" });
+              if (dataResponse.ok) {
+                verified = Boolean(extractTeamFromBackendPayload(await dataResponse.json(), { teamCode: code }));
+              }
+            }
+          } catch {
+            verified = false;
+          }
+          if (!verified) continue;
           state.backendUrl = baseUrl;
           return true;
         }
@@ -2276,7 +2309,18 @@ function bindCommon() {
   document.getElementById("publishTeamBtn")?.addEventListener("click", async () => {
     const status = document.getElementById("teamPublishStatus");
     const ok = await pushTeamToBackend();
-    if (status) status.textContent = ok ? "Team code and accounts published. Athletes can register/login now." : "Could not publish. Check backend URL in Sync.";
+    if (status) status.textContent = ok ? "Backend confirmed this team. Send the join link to athletes." : "Could not confirm this team on the backend. Redeploy backend, then try again.";
+  });
+
+  document.getElementById("copyJoinLinkBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("teamPublishStatus");
+    const ok = await pushTeamToBackend();
+    if (!ok) {
+      if (status) status.textContent = "Could not confirm this team on the backend. Redeploy backend, then try again.";
+      return;
+    }
+    await navigator.clipboard.writeText(athleteJoinUrl());
+    if (status) status.textContent = "Join link copied. Send it to athletes on phone.";
   });
 
   document.getElementById("publishAccountBtn")?.addEventListener("click", async () => {
@@ -2584,7 +2628,7 @@ function bindPage() {
   });
 
   document.getElementById("copyInviteBtn")?.addEventListener("click", async () => {
-    const invite = `Join ${state.teamName} in Athlete Performance Tracker. Team code: ${state.teamCode}. Use your email and password, or create an athlete account with this team code.`;
+    const invite = `Join ${state.teamName} in Athlete Performance Tracker: ${athleteJoinUrl()}. Team code: ${state.teamCode}.`;
     try {
       await navigator.clipboard.writeText(invite);
     } catch {
