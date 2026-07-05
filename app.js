@@ -154,6 +154,9 @@ const state = {
 };
 currentTestDefinitions = state.testDefinitions;
 
+let backendPushTimer;
+let isRestoringFromBackend = false;
+
 function makeTestDefinition(id, component, name, unit, min, max, defaultValue, lowerIsBetter, help, inputType = "number") {
   return { id, component, name, unit, min, max, defaultValue, lowerIsBetter, help, inputType };
 }
@@ -389,6 +392,23 @@ function save() {
   localStorage.setItem("apt-audit-log", JSON.stringify(state.auditLog.slice(-150)));
   localStorage.setItem("apt-athletes", JSON.stringify(state.athletes));
   localStorage.setItem("apt-selected-athlete", state.selectedAthleteId || "");
+  scheduleBackendPush();
+}
+
+function scheduleBackendPush() {
+  if (isRestoringFromBackend || !state.backendUrl || !state.user) return;
+  clearTimeout(backendPushTimer);
+  backendPushTimer = setTimeout(async () => {
+    try {
+      await fetch(`${state.backendUrl}/api/data`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(backupPayload()),
+      });
+    } catch {
+      // Keep local work; the next save can try again.
+    }
+  }, 900);
 }
 
 function logAction(action, detail = "") {
@@ -542,6 +562,7 @@ function render() {
           <select id="mobilePageSelect" class="mobile-page-select">
             ${availableNavItems().map(([id, label, icon]) => `<option value="${id}" ${state.page === id ? "selected" : ""}>${icon} ${label}</option>`).join("")}
           </select>
+          <button class="mobile-logout" id="mobileLogoutBtn" type="button">Sign Out</button>
         </nav>
       </main>
     </div>
@@ -580,7 +601,9 @@ function renderLogin() {
           <h2>${loginTitle()}</h2>
           <p>${loginHelpText()}</p>
           ${state.loginMode === "coach" ? coachLoginFields() : athleteLoginFields()}
+          <div class="sync-note" id="syncNote">Syncing team data from backend...</div>
           <div class="login-error" id="loginError"></div>
+          <button class="ghost-button" id="syncBeforeLoginBtn" type="button">Sync Team Data</button>
           <button class="button game-button" type="submit">${submitLabel()}</button>
         </form>
       </div>
@@ -601,15 +624,22 @@ function renderLogin() {
     });
   });
 
-  document.getElementById("loginForm").addEventListener("submit", (event) => {
+  document.getElementById("loginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    await pullSharedData({ renderAfter: false, silent: true });
     if (state.loginMode === "coach") {
       if (state.authMode === "forgot") return resetPassword();
-      return state.authMode === "signup" ? createCoachAccount() : loginCoachAccount();
+      return state.authMode === "signup" ? createCoachAccount() : loginCoachAccount(true);
     }
 
     if (state.authMode === "forgot") return resetPassword();
-    return state.authMode === "signup" ? createAthleteAccount() : loginAthleteAccount();
+    return state.authMode === "signup" ? createAthleteAccount() : loginAthleteAccount(true);
+  });
+
+  document.getElementById("syncBeforeLoginBtn")?.addEventListener("click", async () => {
+    showLoginError("");
+    const ok = await pullSharedData({ renderAfter: false, silent: false });
+    document.getElementById("syncNote").textContent = ok ? "Team data synced. Try logging in now." : "Could not reach backend yet. Check internet or try again.";
   });
 
   document.getElementById("sendResetCodeBtn")?.addEventListener("click", sendResetCode);
@@ -709,11 +739,14 @@ function forgotPasswordFields() {
   `;
 }
 
-function loginCoachAccount() {
+function loginCoachAccount(alreadySynced = false) {
   const email = normalizeEmail(document.getElementById("email").value);
   const password = document.getElementById("password").value;
   const account = state.accounts.find((item) => normalizeEmail(item.email) === email && item.password === password);
-  if (!account) return showLoginError("No coach account found for that email and password.");
+  if (!account) {
+    if (!alreadySynced) return pullSharedData({ renderAfter: false, silent: true }).then(() => loginCoachAccount(true));
+    return showLoginError("No coach account found for that email and password. Tap Sync Team Data, then try again.");
+  }
   state.user = { name: account.name, role: account.role, username: account.username, email: account.email };
   state.page = "dashboard";
   save();
@@ -738,11 +771,14 @@ function createCoachAccount() {
   render();
 }
 
-function loginAthleteAccount() {
+function loginAthleteAccount(alreadySynced = false) {
   const email = normalizeEmail(document.getElementById("email").value);
   const password = document.getElementById("password").value;
   const athlete = state.athletes.find((item) => normalizeEmail(item.contact) === email && item.password === password);
-  if (!athlete) return showLoginError("No athlete account found for that email and password.");
+  if (!athlete) {
+    if (!alreadySynced) return pullSharedData({ renderAfter: false, silent: true }).then(() => loginAthleteAccount(true));
+    return showLoginError("No athlete account found for that email and password. Tap Sync Team Data, then try again.");
+  }
   state.user = { name: athlete.name, role: "Athlete", athleteId: athlete.id, email: athlete.contact };
   state.selectedAthleteId = athlete.id;
   state.page = "dashboard";
@@ -820,7 +856,8 @@ function resetPassword() {
 }
 
 function showLoginError(message) {
-  document.getElementById("loginError").textContent = message;
+  const error = document.getElementById("loginError");
+  if (error) error.textContent = message;
 }
 
 function renderPage() {
@@ -2092,6 +2129,12 @@ function bindCommon() {
     render();
   });
 
+  document.getElementById("mobileLogoutBtn")?.addEventListener("click", () => {
+    state.user = null;
+    save();
+    render();
+  });
+
   document.getElementById("teamNameBtn")?.addEventListener("click", () => showTeamModal());
 }
 
@@ -2767,15 +2810,17 @@ function updateCalibrationPreview() {
   if (live) live.textContent = `Overall ${average(Object.values(scores))}/100`;
 }
 
-async function autoPullBackendOnLoad() {
-  if (!state.backendUrl || localStorage.getItem("apt-auto-sync-disabled") === "true") return;
+async function pullSharedData({ renderAfter = true, silent = true } = {}) {
+  if (!state.backendUrl || localStorage.getItem("apt-auto-sync-disabled") === "true") return false;
   try {
     const response = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
-    if (!response.ok) return;
+    if (!response.ok) return false;
     const backup = await response.json();
-    if (!backup || !Array.isArray(backup.athletes) || !backup.athletes.length) return;
+    if (!backup || !Array.isArray(backup.athletes) || !backup.athletes.length) return false;
     const currentUserEmail = state.user?.email;
+    isRestoringFromBackend = true;
     restoreBackupData(backup);
+    isRestoringFromBackend = false;
     state.backendUrl = backup.backendUrl || state.backendUrl || defaultBackendUrl;
     if (currentUserEmail) {
       const staff = state.accounts.find((account) => normalizeEmail(account.email) === normalizeEmail(currentUserEmail));
@@ -2785,9 +2830,13 @@ async function autoPullBackendOnLoad() {
       else state.user = null;
     }
     save();
-    render();
+    if (renderAfter) render();
+    return true;
   } catch {
+    isRestoringFromBackend = false;
+    if (!silent) showLoginError("Could not reach the backend. Check internet and try Sync Team Data again.");
     // Offline or cold-start backend: keep the local browser copy.
+    return false;
   }
 }
 
@@ -2800,4 +2849,4 @@ function slug(name) {
 }
 
 render();
-autoPullBackendOnLoad();
+pullSharedData({ renderAfter: true, silent: true });
