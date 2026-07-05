@@ -105,6 +105,22 @@ http.createServer(async (req, res) => {
     const team = findTeamByEmail(store, decodeURIComponent(accountMatch[1]));
     return team ? json(res, 200, team) : json(res, 404, { error: "Account not found" });
   }
+  if (accountMatch && req.method === "DELETE") {
+    const email = normalizeEmail(decodeURIComponent(accountMatch[1]));
+    let removed = false;
+    Object.entries(store.teams).forEach(([code, team]) => {
+      const accounts = team.accounts || [];
+      const athletes = team.athletes || [];
+      const nextAccounts = accounts.filter((account) => normalizeEmail(account.email) !== email);
+      const nextAthletes = athletes.filter((athlete) => normalizeEmail(athlete.contact) !== email);
+      if (nextAccounts.length !== accounts.length || nextAthletes.length !== athletes.length) {
+        removed = true;
+        store.teams[code] = { ...team, accounts: nextAccounts, athletes: nextAthletes };
+      }
+    });
+    if (removed) writeStore(store);
+    return json(res, removed ? 200 : 404, removed ? { ok: true } : { error: "Account not found" });
+  }
 
   json(res, 404, { error: "Not found" });
 }).listen(PORT, () => {

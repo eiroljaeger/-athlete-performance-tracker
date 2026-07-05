@@ -26,6 +26,7 @@ const navItems = [
   ["sync", "Sync", "Y"],
   ["settings", "Settings", "W"],
   ["audit", "Audit", "U"],
+  ["account", "Account", "O"],
   ["reports", "Reports", "R"],
 ];
 
@@ -503,7 +504,7 @@ function selectedAthlete() {
 
 function availableNavItems() {
   if (isAthleteUser()) {
-    const athletePages = ["dashboard", "athlete", "tournaments", "leave", "announcements", "calendar", "goals", "reports"];
+    const athletePages = ["dashboard", "athlete", "tournaments", "leave", "announcements", "calendar", "goals", "account", "reports"];
     if (state.privacy.athleteCanViewTeamChat) athletePages.push("chat");
     return navItems.filter(([id]) => athletePages.includes(id));
   }
@@ -773,6 +774,7 @@ function createCoachAccount() {
   state.page = "dashboard";
   logAction("Coach account created", email);
   save();
+  pushTeamToBackend();
   render();
 }
 
@@ -823,6 +825,7 @@ async function createAthleteAccount() {
   state.page = "dashboard";
   logAction("Athlete account created", athlete.name);
   save();
+  pushTeamToBackend();
   render();
 }
 
@@ -883,6 +886,7 @@ function renderPage() {
   if (state.page === "sync") return syncPage();
   if (state.page === "settings") return settingsPage();
   if (state.page === "audit") return auditPage();
+  if (state.page === "account") return accountPage();
   return reportsPage();
 }
 
@@ -994,8 +998,12 @@ function teamPage() {
           <h2>${state.teamCode}</h2>
           <p>Athletes choose Athlete Login, enter this team code, then enter their personal access code.</p>
         </div>
-        <button class="ghost-button" id="teamNameBtn">Edit Team Setup</button>
+        <div class="btn-row">
+          <button class="button game-button" id="publishTeamBtn" type="button">Publish Team Code</button>
+          <button class="ghost-button" id="teamNameBtn" type="button">Edit Team Setup</button>
+        </div>
       </div>
+      <div class="meta-line" id="teamPublishStatus" style="margin-top:10px">Publish after creating athletes or changing team code.</div>
     </section>
     ${teamViewPanel()}
     ${teamComparisonPanel()}
@@ -1577,11 +1585,12 @@ function extractTeamFromBackendPayload(payload, { teamCode = "", email = "" } = 
   }) || null;
 }
 
-async function pushTeamToBackend() {
+async function pushTeamToBackend(payloadOverride = null) {
   if (!state.backendUrl) return false;
-  const payload = backupPayload();
+  const payload = payloadOverride || backupPayload();
+  const code = payload.teamCode || state.teamCode;
   const requests = [
-    () => fetch(teamEndpoint(state.teamCode), {
+    () => fetch(teamEndpoint(code), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -1601,6 +1610,33 @@ async function pushTeamToBackend() {
     }
   }
   return false;
+}
+
+async function deleteCurrentAccount() {
+  const email = normalizeEmail(state.user?.email);
+  if (!email) return;
+  const confirmed = window.confirm("Delete your account? This frees your email address and signs you out.");
+  if (!confirmed) return;
+
+  let payload;
+  if (isAthleteUser()) {
+    const athleteId = state.user.athleteId;
+    state.athletes = state.athletes.filter((athlete) => athlete.id !== athleteId && normalizeEmail(athlete.contact) !== email);
+    state.leaveRequests = state.leaveRequests.filter((request) => request.athleteId !== athleteId);
+    state.goals = state.goals.filter((goal) => goal.athleteId !== athleteId);
+    state.messages = state.messages.filter((message) => normalizeEmail(message.senderEmail) !== email && normalizeEmail(message.recipient) !== email);
+    payload = backupPayload();
+  } else {
+    state.accounts = state.accounts.filter((account) => normalizeEmail(account.email) !== email);
+    state.messages = state.messages.filter((message) => normalizeEmail(message.senderEmail) !== email && normalizeEmail(message.recipient) !== email);
+    payload = backupPayload();
+  }
+
+  await pushTeamToBackend(payload);
+  state.user = null;
+  state.selectedAthleteId = state.athletes[0]?.id || "";
+  save();
+  render();
 }
 
 function rosterCsv() {
@@ -1722,6 +1758,35 @@ function auditTable() {
       <tr><td>${new Date(item.date).toLocaleString()}</td><td>${item.actor}</td><td>${item.role}</td><td>${item.action}</td><td>${item.detail}</td></tr>
     `).join("") : `<tr><td colspan="5">No audit events yet.</td></tr>`}</tbody>
   </table>`;
+}
+
+function accountPage() {
+  return `
+    <section class="section-title">
+      <div><h2>Account</h2><p>Manage your login, team connection, and account deletion.</p></div>
+    </section>
+    <section class="grid two-col">
+      <div class="panel game-panel">
+        <h2>My Login</h2>
+        <div class="info-grid" style="margin-top:14px">
+          <div class="info-item"><span>Name</span>${state.user.name}</div>
+          <div class="info-item"><span>Email</span>${state.user.email}</div>
+          <div class="info-item"><span>Role</span>${state.user.role}</div>
+          <div class="info-item"><span>Team Code</span>${state.teamCode}</div>
+        </div>
+        <div class="btn-row" style="margin-top:16px">
+          <button class="ghost-button" id="publishAccountBtn" type="button">Publish Team Data</button>
+          <button class="danger-button" id="deleteMyAccountBtn" type="button">Delete My Account</button>
+        </div>
+        <div class="meta-line" id="accountStatus" style="margin-top:10px">Publishing saves this team so other devices can login.</div>
+      </div>
+      <div class="panel game-panel">
+        <h2>Delete Rules</h2>
+        <p class="muted">Deleting removes your login from this team and frees your email address for a new account.</p>
+        <p class="muted">Athletes are removed from the roster. Coaches are removed from staff access. Pushes to the backend immediately.</p>
+      </div>
+    </section>
+  `;
 }
 
 function approvedLeaveDays(athleteId) {
@@ -2191,6 +2256,20 @@ function bindCommon() {
   });
 
   document.getElementById("teamNameBtn")?.addEventListener("click", () => showTeamModal());
+
+  document.getElementById("publishTeamBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("teamPublishStatus");
+    const ok = await pushTeamToBackend();
+    if (status) status.textContent = ok ? "Team code and accounts published. Athletes can register/login now." : "Could not publish. Check backend URL in Sync.";
+  });
+
+  document.getElementById("publishAccountBtn")?.addEventListener("click", async () => {
+    const status = document.getElementById("accountStatus");
+    const ok = await pushTeamToBackend();
+    if (status) status.textContent = ok ? "Team data published to backend." : "Could not publish. Check backend URL in Sync.";
+  });
+
+  document.getElementById("deleteMyAccountBtn")?.addEventListener("click", deleteCurrentAccount);
 }
 
 function bindPage() {
@@ -2730,6 +2809,7 @@ function showTeamModal() {
     state.teamLogo = document.getElementById("teamLogoInput").value.trim();
     logAction("Team setup updated", state.teamName);
     save();
+    pushTeamToBackend();
     closeModal();
     render();
   });
