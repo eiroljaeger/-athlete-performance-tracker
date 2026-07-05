@@ -226,7 +226,8 @@ button {
   flex-direction: column;
   background: var(--nav);
   color: #fff;
-  padding: 20px;
+  padding: 16px;
+  overflow: hidden;
 }
 
 .game-sidebar {
@@ -236,7 +237,8 @@ button {
 }
 
 .sidebar .brand-lockup {
-  margin-bottom: 28px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
 }
 
 .role-pill {
@@ -250,7 +252,12 @@ button {
 
 .nav-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(183, 255, 74, 0.55) rgba(255, 255, 255, 0.06);
 }
 
 .nav-button,
@@ -262,14 +269,16 @@ button {
 
 .nav-button {
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   border-radius: 7px;
   color: rgba(255, 255, 255, 0.74);
-  padding: 10px 12px;
+  padding: 8px 10px;
   text-align: left;
+  font-size: 14px;
+  font-weight: 750;
 }
 
 .nav-button.active,
@@ -281,17 +290,18 @@ button {
 
 .nav-icon,
 .icon-button {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
-  flex: 0 0 28px;
+  flex: 0 0 24px;
 }
 
 .sidebar-footer {
-  margin-top: auto;
+  margin-top: 12px;
+  flex-shrink: 0;
   color: rgba(255, 255, 255, 0.7);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -769,7 +779,9 @@ tr:last-child td {
 }
 
 .share-panel {
-  margin-top: 18px;
+  margin-top: 12px;
+  flex-shrink: 0;
+  padding: 10px;
 }
 
 .share-panel span,
@@ -1462,38 +1474,45 @@ input[type="range"] {
   }
 
   .content {
-    padding: 16px 16px 92px;
+    padding: 16px 16px 98px;
   }
 
   .mobile-tabs {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
     z-index: 10;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
-    background: #fff;
-    border-top: 1px solid var(--line);
-    box-shadow: 0 -10px 30px rgba(17, 26, 34, 0.1);
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    background: rgba(8, 16, 27, 0.96);
+    border: 1px solid var(--game-line);
+    border-radius: 8px;
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.24);
+    color: #f6fbff;
   }
 
-  .mobile-tab {
-    min-height: 64px;
-    display: grid;
-    place-items: center;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 750;
+  .mobile-tabs label {
+    font-size: 12px;
+    font-weight: 900;
+    color: var(--lime);
+    text-transform: uppercase;
   }
 
-  .mobile-tab.active {
-    color: var(--ink);
-    background: #eef5fa;
-  }
-
-  .mobile-tab span:first-child {
-    font-size: 19px;
+  .mobile-page-select {
+    min-height: 44px;
+    min-width: 0;
+    width: 100%;
+    border: 1px solid rgba(111, 231, 255, 0.28);
+    border-radius: 7px;
+    background: #07101a;
+    color: #fff;
+    padding: 8px 10px;
+    font-size: 16px;
+    font-weight: 800;
   }
 
   .section-title {

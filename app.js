@@ -82,6 +82,8 @@ const sportTemplates = {
   Track: { Strength: 10, Agility: 8, Speed: 20, "Reaction Time": 12, Endurance: 14, Flexibility: 8, Balance: 6, Coordination: 6, Power: 16 },
 };
 
+const defaultBackendUrl = "https://athlete-performance-backend.onrender.com";
+
 const seedAthletes = [
   makeAthlete("a1", "Maya Santos", 17, "Track and Field", "Sprinter", "maya.santos@school.edu", "MAYA-88", [
     makeTestFromActivities("2026-06-20", { verticalJump: 8.6, sprint40: 5.4, shuttle: 5.1, reaction: 8.2, beep: 10.8, sitReach: 27, balanceHold: 46, wallToss: 31, pushups: 38 }, "Explosive starts are improving."),
@@ -137,7 +139,7 @@ const state = {
   auditLog: JSON.parse(localStorage.getItem("apt-audit-log") || "null") || [],
   leaveAllowance: Number(localStorage.getItem("apt-leave-allowance") || 10),
   teamLogo: localStorage.getItem("apt-team-logo") || "",
-  backendUrl: localStorage.getItem("apt-backend-url") || "http://127.0.0.1:8787",
+  backendUrl: localStorage.getItem("apt-backend-url") || defaultBackendUrl,
   componentWeights: normalizeWeights(JSON.parse(localStorage.getItem("apt-component-weights") || "null") || sportTemplates.General),
   privacy: JSON.parse(localStorage.getItem("apt-privacy") || "null") || { athleteCanViewRankings: false, athleteCanViewTeamChat: true, showPrivateNotesToAthletes: false },
   athletes: normalizeAthletes(JSON.parse(localStorage.getItem("apt-athletes") || "null") || seedAthletes),
@@ -536,11 +538,10 @@ function render() {
         </header>
         <div class="content">${renderPage()}</div>
         <nav class="mobile-tabs">
-          ${availableNavItems().map(([id, label, icon]) => `
-            <button class="mobile-tab ${state.page === id ? "active" : ""}" data-page="${id}">
-              <span>${icon}</span><span>${label}</span>
-            </button>
-          `).join("")}
+          <label for="mobilePageSelect">Section</label>
+          <select id="mobilePageSelect" class="mobile-page-select">
+            ${availableNavItems().map(([id, label, icon]) => `<option value="${id}" ${state.page === id ? "selected" : ""}>${icon} ${label}</option>`).join("")}
+          </select>
         </nav>
       </main>
     </div>
@@ -2081,6 +2082,10 @@ function bindCommon() {
     button.addEventListener("click", () => setPage(button.dataset.page));
   });
 
+  document.getElementById("mobilePageSelect")?.addEventListener("change", (event) => {
+    setPage(event.target.value);
+  });
+
   document.getElementById("logoutBtn")?.addEventListener("click", () => {
     state.user = null;
     save();
@@ -2762,6 +2767,30 @@ function updateCalibrationPreview() {
   if (live) live.textContent = `Overall ${average(Object.values(scores))}/100`;
 }
 
+async function autoPullBackendOnLoad() {
+  if (!state.backendUrl || localStorage.getItem("apt-auto-sync-disabled") === "true") return;
+  try {
+    const response = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
+    if (!response.ok) return;
+    const backup = await response.json();
+    if (!backup || !Array.isArray(backup.athletes) || !backup.athletes.length) return;
+    const currentUserEmail = state.user?.email;
+    restoreBackupData(backup);
+    state.backendUrl = backup.backendUrl || state.backendUrl || defaultBackendUrl;
+    if (currentUserEmail) {
+      const staff = state.accounts.find((account) => normalizeEmail(account.email) === normalizeEmail(currentUserEmail));
+      const athlete = state.athletes.find((item) => normalizeEmail(item.contact) === normalizeEmail(currentUserEmail));
+      if (staff) state.user = { name: staff.name, role: staff.role, username: staff.username, email: staff.email };
+      else if (athlete) state.user = { name: athlete.name, role: "Athlete", athleteId: athlete.id, email: athlete.contact };
+      else state.user = null;
+    }
+    save();
+    render();
+  } catch {
+    // Offline or cold-start backend: keep the local browser copy.
+  }
+}
+
 function initials(name) {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 }
@@ -2771,3 +2800,4 @@ function slug(name) {
 }
 
 render();
+autoPullBackendOnLoad();
