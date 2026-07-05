@@ -344,6 +344,24 @@ function normalizeTeamCode(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+function uniqueTeamCode(seed = "TEAM") {
+  const base = normalizeTeamCode(seed).slice(0, 8) || "TEAM";
+  const year = new Date().getFullYear();
+  return `${base}-${year}`;
+}
+
+function backendUrl(path) {
+  return `${state.backendUrl}${path}`;
+}
+
+function teamEndpoint(code = state.teamCode) {
+  return backendUrl(`/api/teams/${encodeURIComponent(normalizeTeamCode(code))}`);
+}
+
+function accountEndpoint(email) {
+  return backendUrl(`/api/accounts/${encodeURIComponent(normalizeEmail(email))}`);
+}
+
 function emailToUsername(email) {
   return normalizeEmail(email).split("@")[0] || `user-${Math.floor(Math.random() * 1000)}`;
 }
@@ -400,7 +418,7 @@ function scheduleBackendPush() {
   clearTimeout(backendPushTimer);
   backendPushTimer = setTimeout(async () => {
     try {
-      await fetch(`${state.backendUrl}/api/data`, {
+      await fetch(teamEndpoint(state.teamCode), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(backupPayload()),
@@ -580,6 +598,7 @@ function renderLogin() {
         <div>
           <h1>Performance Arena</h1>
           <p>Coach enters activity results. The app calibrates strength, speed, agility, reaction, endurance, and overall player rating automatically.</p>
+          <p class="creator-line">Made by Eirol.</p>
         </div>
         <div class="login-stats">
           <div class="login-stat"><strong>9</strong><span>activity tests</span></div>
@@ -601,9 +620,7 @@ function renderLogin() {
           <h2>${loginTitle()}</h2>
           <p>${loginHelpText()}</p>
           ${state.loginMode === "coach" ? coachLoginFields() : athleteLoginFields()}
-          <div class="sync-note" id="syncNote">Syncing team data from backend...</div>
           <div class="login-error" id="loginError"></div>
-          <button class="ghost-button" id="syncBeforeLoginBtn" type="button">Sync Team Data</button>
           <button class="button game-button" type="submit">${submitLabel()}</button>
         </form>
       </div>
@@ -626,7 +643,6 @@ function renderLogin() {
 
   document.getElementById("loginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await pullSharedData({ renderAfter: false, silent: true });
     if (state.loginMode === "coach") {
       if (state.authMode === "forgot") return resetPassword();
       return state.authMode === "signup" ? createCoachAccount() : loginCoachAccount(true);
@@ -634,12 +650,6 @@ function renderLogin() {
 
     if (state.authMode === "forgot") return resetPassword();
     return state.authMode === "signup" ? createAthleteAccount() : loginAthleteAccount(true);
-  });
-
-  document.getElementById("syncBeforeLoginBtn")?.addEventListener("click", async () => {
-    showLoginError("");
-    const ok = await pullSharedData({ renderAfter: false, silent: false });
-    document.getElementById("syncNote").textContent = ok ? "Team data synced. Try logging in now." : "Could not reach backend yet. Check internet or try again.";
   });
 
   document.getElementById("sendResetCodeBtn")?.addEventListener("click", sendResetCode);
@@ -654,8 +664,8 @@ function loginTitle() {
 
 function loginHelpText() {
   if (state.authMode === "forgot") return "Enter the email used for this app. A reset code will be sent to that email.";
-  if (state.loginMode === "coach" && state.authMode === "signup") return "Create a coach account with email and password. Admin can upgrade roles later.";
-  if (state.loginMode === "athlete" && state.authMode === "signup") return "Use the team share code once, then login later with email and password.";
+  if (state.loginMode === "coach" && state.authMode === "signup") return "Create your coach account. The app will generate a unique team code for your athletes.";
+  if (state.loginMode === "athlete" && state.authMode === "signup") return "Enter your coach's team code to join that team from any device.";
   if (state.loginMode === "coach") return "Demo: coach@apt.demo / coach123 or admin@apt.demo / admin123.";
   return "Login with the athlete email and password connected to the team.";
 }
@@ -744,8 +754,8 @@ function loginCoachAccount(alreadySynced = false) {
   const password = document.getElementById("password").value;
   const account = state.accounts.find((item) => normalizeEmail(item.email) === email && item.password === password);
   if (!account) {
-    if (!alreadySynced) return pullSharedData({ renderAfter: false, silent: true }).then(() => loginCoachAccount(true));
-    return showLoginError("No coach account found for that email and password. Tap Sync Team Data, then try again.");
+    if (!alreadySynced) return pullTeamByAccountEmail(email).then(() => loginCoachAccount(true));
+    return showLoginError("No coach account found for that email and password.");
   }
   state.user = { name: account.name, role: account.role, username: account.username, email: account.email };
   state.page = "dashboard";
@@ -762,6 +772,8 @@ function createCoachAccount() {
   if (!isPasswordValid(password)) return showLoginError("Password must be at least 6 characters.");
   if (emailExists(email)) return showLoginError("That email is already registered.");
 
+  state.teamName = `${name}'s Team`;
+  state.teamCode = uniqueTeamCode(name);
   const account = { username: emailToUsername(email), email, password, name, role: "Coach" };
   state.accounts.push(account);
   state.user = { name: account.name, role: account.role, username: account.username, email: account.email };
@@ -776,8 +788,8 @@ function loginAthleteAccount(alreadySynced = false) {
   const password = document.getElementById("password").value;
   const athlete = state.athletes.find((item) => normalizeEmail(item.contact) === email && item.password === password);
   if (!athlete) {
-    if (!alreadySynced) return pullSharedData({ renderAfter: false, silent: true }).then(() => loginAthleteAccount(true));
-    return showLoginError("No athlete account found for that email and password. Tap Sync Team Data, then try again.");
+    if (!alreadySynced) return pullTeamByAccountEmail(email).then(() => loginAthleteAccount(true));
+    return showLoginError("No athlete account found for that email and password.");
   }
   state.user = { name: athlete.name, role: "Athlete", athleteId: athlete.id, email: athlete.contact };
   state.selectedAthleteId = athlete.id;
@@ -786,12 +798,14 @@ function loginAthleteAccount(alreadySynced = false) {
   render();
 }
 
-function createAthleteAccount() {
+async function createAthleteAccount() {
   const teamCode = document.getElementById("teamCode").value.trim().toUpperCase();
   const name = document.getElementById("athleteName").value.trim();
   const email = normalizeEmail(document.getElementById("email").value);
   const password = document.getElementById("password").value;
-  if (normalizeTeamCode(teamCode) !== normalizeTeamCode(state.teamCode)) return showLoginError(`Team share code does not match. Use ${state.teamCode}.`);
+  const teamLoaded = await pullTeamByCode(teamCode, { renderAfter: false });
+  if (!teamLoaded && normalizeTeamCode(teamCode) !== normalizeTeamCode(state.teamCode)) return showLoginError("Team share code does not match any team. Ask your coach for the exact code.");
+  if (normalizeTeamCode(teamCode) !== normalizeTeamCode(state.teamCode)) return showLoginError("Team share code does not match this team. Ask your coach for the exact code.");
   if (!name) return showLoginError("Enter the athlete name.");
   if (!isValidEmail(email)) return showLoginError("Enter a valid email address.");
   if (!isPasswordValid(password)) return showLoginError("Password must be at least 6 characters.");
@@ -2409,7 +2423,7 @@ function bindPage() {
     const status = document.getElementById("backendStatus");
     state.backendUrl = document.getElementById("backendUrl").value.trim() || state.backendUrl;
     try {
-      const response = await fetch(`${state.backendUrl}/api/data`, {
+      const response = await fetch(teamEndpoint(state.teamCode), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(backupPayload()),
@@ -2427,7 +2441,7 @@ function bindPage() {
     const status = document.getElementById("backendStatus");
     state.backendUrl = document.getElementById("backendUrl").value.trim() || state.backendUrl;
     try {
-      const response = await fetch(`${state.backendUrl}/api/data`);
+      const response = await fetch(teamEndpoint(state.teamCode));
       if (!response.ok) throw new Error("Sync failed");
       restoreBackupData(await response.json());
       logAction("Backend sync pulled", state.backendUrl);
@@ -2811,9 +2825,13 @@ function updateCalibrationPreview() {
 }
 
 async function pullSharedData({ renderAfter = true, silent = true } = {}) {
+  return pullTeamByCode(state.teamCode, { renderAfter, silent });
+}
+
+async function pullTeamByCode(teamCode, { renderAfter = true, silent = true } = {}) {
   if (!state.backendUrl || localStorage.getItem("apt-auto-sync-disabled") === "true") return false;
   try {
-    const response = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
+    const response = await fetch(teamEndpoint(teamCode), { cache: "no-store" });
     if (!response.ok) return false;
     const backup = await response.json();
     if (!backup || !Array.isArray(backup.athletes) || !backup.athletes.length) return false;
@@ -2836,6 +2854,24 @@ async function pullSharedData({ renderAfter = true, silent = true } = {}) {
     isRestoringFromBackend = false;
     if (!silent) showLoginError("Could not reach the backend. Check internet and try Sync Team Data again.");
     // Offline or cold-start backend: keep the local browser copy.
+    return false;
+  }
+}
+
+async function pullTeamByAccountEmail(email) {
+  if (!state.backendUrl || !isValidEmail(email)) return false;
+  try {
+    const response = await fetch(accountEndpoint(email), { cache: "no-store" });
+    if (!response.ok) return false;
+    const backup = await response.json();
+    if (!backup || !Array.isArray(backup.athletes)) return false;
+    isRestoringFromBackend = true;
+    restoreBackupData(backup);
+    isRestoringFromBackend = false;
+    save();
+    return true;
+  } catch {
+    isRestoringFromBackend = false;
     return false;
   }
 }

@@ -108,6 +108,12 @@ button {
   line-height: 1.6;
 }
 
+.creator-line {
+  margin-top: 10px;
+  color: var(--lime) !important;
+  font-weight: 900;
+}
+
 .login-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
