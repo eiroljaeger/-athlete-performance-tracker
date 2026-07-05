@@ -1,0 +1,17 @@
+{
+  "name": "Athlete Performance Tracker",
+  "short_name": "APT",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b111a",
+  "theme_color": "#0b111a",
+  "description": "A mobile-friendly app for team attendance, athlete testing, goals, reports, chat, and performance analytics.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
