@@ -22,7 +22,7 @@ function migrateStore(data) {
   if (data.teams && !Array.isArray(data.teams)) return { ...emptyStore(), ...data };
   if (data.teamCode && Array.isArray(data.athletes)) {
     const code = normalizeCode(data.teamCode);
-    return { ...emptyStore(), teams: { [code]: { ...data, teamCode: code } } };
+    return { ...emptyStore(), teams: { [code]: { ...data } } };
   }
   return emptyStore();
 }
@@ -81,9 +81,9 @@ http.createServer(async (req, res) => {
     const body = await readBody(req);
     const code = normalizeCode(body.teamCode);
     if (!code) return json(res, 400, { error: "teamCode is required" });
-    store.teams[code] = { ...body, teamCode: code };
+    store.teams[code] = { ...body, teamCode: body.teamCode || code };
     writeStore(store);
-    return json(res, 200, { ok: true, teamCode: code });
+    return json(res, 200, store.teams[code]);
   }
 
   const teamMatch = url.pathname.match(/^\/api\/teams\/([^/]+)$/);
@@ -95,9 +95,9 @@ http.createServer(async (req, res) => {
   if (teamMatch && req.method === "POST") {
     const code = normalizeCode(decodeURIComponent(teamMatch[1]));
     const body = await readBody(req);
-    store.teams[code] = { ...body, teamCode: code };
+    store.teams[code] = { ...body, teamCode: body.teamCode || code };
     writeStore(store);
-    return json(res, 200, { ok: true, teamCode: code });
+    return json(res, 200, store.teams[code]);
   }
 
   const accountMatch = url.pathname.match(/^\/api\/accounts\/([^/]+)$/);

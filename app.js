@@ -364,6 +364,18 @@ function accountEndpoint(email) {
   return backendUrl(`/api/accounts/${encodeURIComponent(normalizeEmail(email))}`);
 }
 
+function backendBases() {
+  return [...new Set([state.backendUrl, defaultBackendUrl].filter(Boolean).map((url) => url.replace(/\/+$/, "")))];
+}
+
+function teamEndpointFor(baseUrl, code = state.teamCode) {
+  return `${baseUrl}/api/teams/${encodeURIComponent(normalizeTeamCode(code))}`;
+}
+
+function accountEndpointFor(baseUrl, email) {
+  return `${baseUrl}/api/accounts/${encodeURIComponent(normalizeEmail(email))}`;
+}
+
 function emailToUsername(email) {
   return normalizeEmail(email).split("@")[0] || `user-${Math.floor(Math.random() * 1000)}`;
 }
@@ -1586,27 +1598,31 @@ function extractTeamFromBackendPayload(payload, { teamCode = "", email = "" } = 
 }
 
 async function pushTeamToBackend(payloadOverride = null) {
-  if (!state.backendUrl) return false;
   const payload = payloadOverride || backupPayload();
   const code = payload.teamCode || state.teamCode;
-  const requests = [
-    () => fetch(teamEndpoint(code), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
-    () => fetch(`${state.backendUrl}/api/data`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
-  ];
-  for (const request of requests) {
-    try {
-      const response = await request();
-      if (response.ok) return true;
-    } catch {
-      // Try the next backend shape.
+  for (const baseUrl of backendBases()) {
+    const requests = [
+      () => fetch(teamEndpointFor(baseUrl, code), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+      () => fetch(`${baseUrl}/api/data`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ];
+    for (const request of requests) {
+      try {
+        const response = await request();
+        if (response.ok) {
+          state.backendUrl = baseUrl;
+          return true;
+        }
+      } catch {
+        // Try the next backend shape.
+      }
     }
   }
   return false;
@@ -2941,25 +2957,39 @@ function updateCalibrationPreview() {
 }
 
 async function pullSharedData({ renderAfter = true, silent = true } = {}) {
-  return pullTeamByCode(state.teamCode, { renderAfter, silent });
+  return pullTeamByCode(state.teamCode, { renderAfter, silent, respectDisabled: true });
 }
 
-async function pullTeamByCode(teamCode, { renderAfter = true, silent = true } = {}) {
-  if (!state.backendUrl || localStorage.getItem("apt-auto-sync-disabled") === "true") return false;
+async function pullTeamByCode(teamCode, { renderAfter = true, silent = true, respectDisabled = false } = {}) {
+  if (!teamCode || (respectDisabled && localStorage.getItem("apt-auto-sync-disabled") === "true")) return false;
   try {
     let backup = null;
-    const teamResponse = await fetch(teamEndpoint(teamCode), { cache: "no-store" });
-    if (teamResponse.ok) backup = await teamResponse.json();
-    if (!backup) {
-      const dataResponse = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
-      if (dataResponse.ok) backup = extractTeamFromBackendPayload(await dataResponse.json(), { teamCode });
+    let workingBackend = state.backendUrl || defaultBackendUrl;
+    for (const baseUrl of backendBases()) {
+      try {
+        const teamResponse = await fetch(teamEndpointFor(baseUrl, teamCode), { cache: "no-store" });
+        if (teamResponse.ok) {
+          backup = await teamResponse.json();
+          workingBackend = baseUrl;
+        }
+        if (!backup) {
+          const dataResponse = await fetch(`${baseUrl}/api/data`, { cache: "no-store" });
+          if (dataResponse.ok) {
+            backup = extractTeamFromBackendPayload(await dataResponse.json(), { teamCode });
+            if (backup) workingBackend = baseUrl;
+          }
+        }
+      } catch {
+        // Try the next configured backend.
+      }
+      if (backup) break;
     }
     if (!backup || !Array.isArray(backup.athletes)) return false;
     const currentUserEmail = state.user?.email;
     isRestoringFromBackend = true;
     restoreBackupData(backup);
     isRestoringFromBackend = false;
-    state.backendUrl = backup.backendUrl || state.backendUrl || defaultBackendUrl;
+    state.backendUrl = backup.backendUrl || workingBackend || state.backendUrl || defaultBackendUrl;
     if (currentUserEmail) {
       const staff = state.accounts.find((account) => normalizeEmail(account.email) === normalizeEmail(currentUserEmail));
       const athlete = state.athletes.find((item) => normalizeEmail(item.contact) === normalizeEmail(currentUserEmail));
@@ -2979,19 +3009,34 @@ async function pullTeamByCode(teamCode, { renderAfter = true, silent = true } = 
 }
 
 async function pullTeamByAccountEmail(email) {
-  if (!state.backendUrl || !isValidEmail(email)) return false;
+  if (!isValidEmail(email)) return false;
   try {
     let backup = null;
-    const response = await fetch(accountEndpoint(email), { cache: "no-store" });
-    if (response.ok) backup = await response.json();
-    if (!backup) {
-      const dataResponse = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
-      if (dataResponse.ok) backup = extractTeamFromBackendPayload(await dataResponse.json(), { email });
+    let workingBackend = state.backendUrl || defaultBackendUrl;
+    for (const baseUrl of backendBases()) {
+      try {
+        const response = await fetch(accountEndpointFor(baseUrl, email), { cache: "no-store" });
+        if (response.ok) {
+          backup = await response.json();
+          workingBackend = baseUrl;
+        }
+        if (!backup) {
+          const dataResponse = await fetch(`${baseUrl}/api/data`, { cache: "no-store" });
+          if (dataResponse.ok) {
+            backup = extractTeamFromBackendPayload(await dataResponse.json(), { email });
+            if (backup) workingBackend = baseUrl;
+          }
+        }
+      } catch {
+        // Try the next configured backend.
+      }
+      if (backup) break;
     }
     if (!backup || !Array.isArray(backup.athletes)) return false;
     isRestoringFromBackend = true;
     restoreBackupData(backup);
     isRestoringFromBackend = false;
+    state.backendUrl = backup.backendUrl || workingBackend || state.backendUrl || defaultBackendUrl;
     save();
     return true;
   } catch {
