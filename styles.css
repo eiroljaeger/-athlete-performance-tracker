@@ -672,6 +672,38 @@ tr:last-child td {
   gap: 12px;
 }
 
+.athlete-card.game-card {
+  color: var(--ink);
+}
+
+.athlete-card.game-card .athlete-name {
+  color: #0b1723;
+}
+
+.athlete-card.game-card .meta-line {
+  color: #5d7183;
+}
+
+.athlete-card.game-card .info-item {
+  background: #f7fbff;
+  border-color: #d8edf7;
+  color: #152536;
+}
+
+.athlete-card.game-card .info-item span {
+  color: #5d7183;
+}
+
+.athlete-card.game-card .ghost-button {
+  background: #f7fbff;
+  border-color: #cceaf6;
+  color: #123044;
+}
+
+.athlete-card.game-card .availability-row {
+  color: #5d7183;
+}
+
 .game-hero {
   min-height: 260px;
   display: grid;

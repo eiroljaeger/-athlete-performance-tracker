@@ -347,7 +347,8 @@ function normalizeTeamCode(value) {
 function uniqueTeamCode(seed = "TEAM") {
   const base = normalizeTeamCode(seed).slice(0, 8) || "TEAM";
   const year = new Date().getFullYear();
-  return `${base}-${year}`;
+  const suffix = Math.floor(1000 + Math.random() * 9000);
+  return `${base}-${year}-${suffix}`;
 }
 
 function backendUrl(path) {
@@ -417,15 +418,7 @@ function scheduleBackendPush() {
   if (isRestoringFromBackend || !state.backendUrl || !state.user) return;
   clearTimeout(backendPushTimer);
   backendPushTimer = setTimeout(async () => {
-    try {
-      await fetch(teamEndpoint(state.teamCode), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(backupPayload()),
-      });
-    } catch {
-      // Keep local work; the next save can try again.
-    }
+    await pushTeamToBackend();
   }, 900);
 }
 
@@ -1562,6 +1555,54 @@ function restoreBackupData(backup) {
   state.page = "dashboard";
 }
 
+function teamContainsEmail(team, email) {
+  const normalized = normalizeEmail(email);
+  return (team.accounts || []).some((account) => normalizeEmail(account.email) === normalized)
+    || (team.athletes || []).some((athlete) => normalizeEmail(athlete.contact) === normalized);
+}
+
+function extractTeamFromBackendPayload(payload, { teamCode = "", email = "" } = {}) {
+  if (!payload) return null;
+  const code = normalizeTeamCode(teamCode);
+  if (Array.isArray(payload.athletes)) {
+    const codeMatches = !code || normalizeTeamCode(payload.teamCode) === code;
+    const emailMatches = !email || teamContainsEmail(payload, email);
+    return codeMatches && emailMatches ? payload : null;
+  }
+  const teams = payload.teams && !Array.isArray(payload.teams) ? Object.values(payload.teams) : [];
+  return teams.find((team) => {
+    const codeMatches = code && normalizeTeamCode(team.teamCode) === code;
+    const emailMatches = email && teamContainsEmail(team, email);
+    return codeMatches || emailMatches;
+  }) || null;
+}
+
+async function pushTeamToBackend() {
+  if (!state.backendUrl) return false;
+  const payload = backupPayload();
+  const requests = [
+    () => fetch(teamEndpoint(state.teamCode), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+    () => fetch(`${state.backendUrl}/api/data`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  ];
+  for (const request of requests) {
+    try {
+      const response = await request();
+      if (response.ok) return true;
+    } catch {
+      // Try the next backend shape.
+    }
+  }
+  return false;
+}
+
 function rosterCsv() {
   const rows = [
     ["name", "age", "sport", "position", "email", "password", "accessCode", "emergencyContact", "injuryStatus"],
@@ -2423,12 +2464,8 @@ function bindPage() {
     const status = document.getElementById("backendStatus");
     state.backendUrl = document.getElementById("backendUrl").value.trim() || state.backendUrl;
     try {
-      const response = await fetch(teamEndpoint(state.teamCode), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(backupPayload()),
-      });
-      if (!response.ok) throw new Error("Sync failed");
+      const ok = await pushTeamToBackend();
+      if (!ok) throw new Error("Sync failed");
       if (status) status.textContent = "Team data pushed to backend.";
       logAction("Backend sync pushed", state.backendUrl);
       save();
@@ -2441,9 +2478,8 @@ function bindPage() {
     const status = document.getElementById("backendStatus");
     state.backendUrl = document.getElementById("backendUrl").value.trim() || state.backendUrl;
     try {
-      const response = await fetch(teamEndpoint(state.teamCode));
-      if (!response.ok) throw new Error("Sync failed");
-      restoreBackupData(await response.json());
+      const ok = await pullTeamByCode(state.teamCode, { renderAfter: false, silent: true });
+      if (!ok) throw new Error("Sync failed");
       logAction("Backend sync pulled", state.backendUrl);
       save();
       render();
@@ -2831,10 +2867,14 @@ async function pullSharedData({ renderAfter = true, silent = true } = {}) {
 async function pullTeamByCode(teamCode, { renderAfter = true, silent = true } = {}) {
   if (!state.backendUrl || localStorage.getItem("apt-auto-sync-disabled") === "true") return false;
   try {
-    const response = await fetch(teamEndpoint(teamCode), { cache: "no-store" });
-    if (!response.ok) return false;
-    const backup = await response.json();
-    if (!backup || !Array.isArray(backup.athletes) || !backup.athletes.length) return false;
+    let backup = null;
+    const teamResponse = await fetch(teamEndpoint(teamCode), { cache: "no-store" });
+    if (teamResponse.ok) backup = await teamResponse.json();
+    if (!backup) {
+      const dataResponse = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
+      if (dataResponse.ok) backup = extractTeamFromBackendPayload(await dataResponse.json(), { teamCode });
+    }
+    if (!backup || !Array.isArray(backup.athletes)) return false;
     const currentUserEmail = state.user?.email;
     isRestoringFromBackend = true;
     restoreBackupData(backup);
@@ -2861,9 +2901,13 @@ async function pullTeamByCode(teamCode, { renderAfter = true, silent = true } = 
 async function pullTeamByAccountEmail(email) {
   if (!state.backendUrl || !isValidEmail(email)) return false;
   try {
+    let backup = null;
     const response = await fetch(accountEndpoint(email), { cache: "no-store" });
-    if (!response.ok) return false;
-    const backup = await response.json();
+    if (response.ok) backup = await response.json();
+    if (!backup) {
+      const dataResponse = await fetch(`${state.backendUrl}/api/data`, { cache: "no-store" });
+      if (dataResponse.ok) backup = extractTeamFromBackendPayload(await dataResponse.json(), { email });
+    }
     if (!backup || !Array.isArray(backup.athletes)) return false;
     isRestoringFromBackend = true;
     restoreBackupData(backup);
